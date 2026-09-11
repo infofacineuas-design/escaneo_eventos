@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Registro de asistencia</title>
+<style>
+  body { font-family: Arial, sans-serif; text-align: center; background: #111; color: #fff; margin: 0; padding: 10px; }
+  #video { width: 100%; max-width: 480px; border-radius: 8px; }
+  #resultado { margin-top: 14px; font-size: 18px; min-height: 60px; }
+  .ok { color: #5cd65c; } .error { color: #ff6b6b; } .info { color: #9fc5e8; }
+  button, input, select { padding: 10px 18px; border-radius: 6px; border: none; font-size: 15px; margin-top: 10px; }
+  button { background: #0b5394; color: #fff; cursor: pointer; }
+  #panelToken, #panelEvento { max-width: 340px; margin: 40px auto; }
+  #panelToken input, #panelEvento select { width: 100%; box-sizing: border-box; margin-bottom: 10px; }
+  #eventoActivo { font-size: 14px; color: #9fc5e8; margin-top: 6px; }
+  #cambiarEvento { background: #555; margin-top: 16px; }
+</style>
+</head>
+<body>
+
+<div id="panelToken">
+  <h2>Acceso de staff</h2>
+  <p>Ingresa el token de escaneo del evento (se guarda solo en este dispositivo).</p>
+  <input id="inputToken" type="password" placeholder="Token de escaneo">
+  <button onclick="guardarToken()">Entrar</button>
+</div>
+
+<div id="panelEvento" style="display:none;">
+  <h2>¿Qué evento vas a escanear?</h2>
+  <select id="selectEvento"><option value="">Cargando eventos...</option></select>
+  <br><button onclick="confirmarEvento()">Continuar</button>
+</div>
+
+<div id="panelEscaneo" style="display:none;">
+  <h2>Registro de asistencia</h2>
+  <div id="eventoActivo"></div>
+  <video id="video" playsinline></video>
+  <canvas id="canvas" style="display:none;"></canvas>
+  <div id="resultado">Apunta la cámara al código QR del pase...</div>
+  <button onclick="reiniciar()">Escanear otro</button>
+  <br><button id="cambiarEvento" onclick="mostrarPanelEvento()">Cambiar evento</button>
+  <br><button onclick="cerrarSesion()" style="background:#333; margin-top:10px;">Cambiar token</button>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jsQR/1.4.0/jsQR.js"></script>
+<script>
+  // Pega aquí la URL del backend (Paso 3 del README), ej:
+  // https://script.google.com/macros/s/XXXXXXXX/exec
+  const API_URL = 'PEGA_AQUI_LA_URL_DEL_API';
+
+  const video = document.getElementById('video');
+  const canvas = document.getElementById('canvas');
+  const ctx = canvas.getContext('2d');
+  let escaneando = true;
+  let stream = null;
+  let eventoSeleccionado = null; // { id, nombre, fecha }
+
+  if (localStorage.getItem('token_escaneo')) {
+    mostrarPanelEvento();
+  }
+
+  function guardarToken() {
+    const t = document.getElementById('inputToken').value.trim();
+    if (!t) return;
+    localStorage.setItem('token_escaneo', t);
+    mostrarPanelEvento();
+  }
+
+  function cerrarSesion() {
+    localStorage.removeItem('token_escaneo');
+    detenerCamara();
+    document.getElementById('panelEscaneo').style.display = 'none';
+    document.getElementById('panelEvento').style.display = 'none';
+    document.getElementById('panelToken').style.display = 'block';
+  }
+
+  function mostrarPanelEvento() {
+    detenerCamara();
+    document.getElementById('panelToken').style.display = 'none';
+    document.getElementById('panelEscaneo').style.display = 'none';
+    document.getElementById('panelEvento').style.display = 'block';
+    cargarEventos();
+  }
+
+  function cargarEventos() {
+    const select = document.getElementById('selectEvento');
+    select.innerHTML = '<option value="">Cargando eventos...</option>';
+    fetch(API_URL + '?accion=eventos')
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        const eventos = (data.ok && data.eventos) ? data.eventos : [];
+        if (eventos.length === 0) {
+          select.innerHTML = '<option value="">No hay eventos activos</option>';
+          return;
+        }
+        select.innerHTML = eventos.map(function (ev) {
+          return '<option value="' + ev.id + '" data-nombre="' + escapeAttr(ev.nombre) + '" data-fecha="' + escapeAttr(ev.fecha) + '">' +
+                 escapeAttr(ev.nombre) + ' (' + escapeAttr(ev.fecha) + ')</option>';
+        }).join('');
+      })
+      .catch(function () {
+        select.innerHTML = '<option value="">Error al cargar eventos</option>';
+      });
+  }
+
+  function confirmarEvento() {
+    const select = document.getElementById('selectEvento');
+    const opcion = select.options[select.selectedIndex];
+    if (!opcion || !opcion.value) { alert('Elige un evento de la lista.'); return; }
+    eventoSeleccionado = {
+      id: opcion.value,
+      nombre: opcion.getAttribute('data-nombre'),
+      fecha: opcion.getAttribute('data-fecha')
+    };
+    document.getElementById('panelEvento').style.display = 'none';
+    document.getElementById('panelEscaneo').style.display = 'block';
+    document.getElementById('eventoActivo').textContent = 'Evento: ' + eventoSeleccionado.nombre + ' (' + eventoSeleccionado.fecha + ')';
+    iniciarCamara();
+  }
+
+  function detenerCamara() {
+    if (stream) { stream.getTracks().forEach(function (tr) { tr.stop(); }); stream = null; }
+  }
+
+  function iniciarCamara() {
+    escaneando = true;
+    navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
+      .then(function (s) {
+        stream = s;
+        video.srcObject = s;
+        video.setAttribute('playsinline', true);
+        video.play();
+        requestAnimationFrame(tick);
+      })
+      .catch(function (err) {
+        document.getElementById('resultado').innerHTML = '<span class="error">No se pudo acceder a la cámara: ' + err + '</span>';
+      });
+  }
+
+  function tick() {
+    if (video.readyState === video.HAVE_ENOUGH_DATA && escaneando) {
+      canvas.height = video.videoHeight;
+      canvas.width = video.videoWidth;
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const code = jsQR(imageData.data, imageData.width, imageData.height);
+      if (code && code.data) {
+        escaneando = false;
+        procesar(code.data);
+        return;
+      }
+    }
+    requestAnimationFrame(tick);
+  }
+
+  function procesar(folio) {
+    document.getElementById('resultado').innerHTML = 'Verificando folio ' + folio + '...';
+    // Content-Type text/plain evita el preflight OPTIONS (Apps Script no lo maneja bien).
+    fetch(API_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain' },
+      body: JSON.stringify({ accion: 'scan', folio: folio, eventoId: eventoSeleccionado.id, token: localStorage.getItem('token_escaneo') })
+    })
+      .then(function (r) { return r.json(); })
+      .then(mostrarResultado)
+      .catch(function (err) {
+        document.getElementById('resultado').innerHTML = '<span class="error">Error de conexión: ' + err + '</span>';
+      });
+  }
+
+  function mostrarResultado(r) {
+    const div = document.getElementById('resultado');
+    if (r.mensaje === 'No autorizado.') {
+      div.innerHTML = '<span class="error">Token inválido. Revisa el token con el organizador.</span>';
+      return;
+    }
+    const clase = r.ok ? 'ok' : (r.mensaje && r.mensaje.indexOf('otro evento') !== -1 ? 'info' : 'error');
+    div.innerHTML = '<span class="' + clase + '">' + (r.ok ? '✔ ' : '✖ ') + r.mensaje + (r.nombre ? '<br>' + r.nombre : '') + '</span>';
+  }
+
+  function reiniciar() {
+    escaneando = true;
+    document.getElementById('resultado').textContent = 'Apunta la cámara al código QR del pase...';
+    requestAnimationFrame(tick);
+  }
+
+  function escapeAttr(str) {
+    const div = document.createElement('div');
+    div.textContent = String(str == null ? '' : str);
+    return div.innerHTML.replace(/"/g, '&quot;');
+  }
+</script>
+</body>
+</html>
