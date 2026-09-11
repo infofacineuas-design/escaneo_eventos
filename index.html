@@ -41,6 +41,8 @@
   <button onclick="reiniciar()">Escanear otro</button>
   <br><button id="cambiarEvento" onclick="mostrarPanelEvento()">Cambiar evento</button>
   <br><button onclick="cerrarSesion()" style="background:#333; margin-top:10px;">Cambiar token</button>
+  <hr style="margin-top:20px; opacity:0.2;">
+<button onclick="enviarConstanciasEvento()" style="background:#a33;">Enviar constancias de esta ponencia</button>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
@@ -194,6 +196,32 @@
     div.textContent = String(str == null ? '' : str);
     return div.innerHTML.replace(/"/g, '&quot;');
   }
+
+  function enviarConstanciasEvento() {
+  if (!eventoSeleccionado) return;
+  const confirmar = confirm(
+    '¿Enviar las constancias de "' + eventoSeleccionado.nombre + '" a todos los confirmados?\n' +
+    'Esta acción no se puede deshacer (aunque no duplica envíos si la repites).'
+  );
+  if (!confirmar) return;
+
+  const codigo = prompt('Código de autorización para enviar constancias:');
+  if (!codigo) return;
+
+  document.getElementById('resultado').innerHTML = 'Enviando constancias, esto puede tardar unos segundos...';
+  fetch(API_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain' },
+    body: JSON.stringify({ accion: 'enviarConstancias', eventoId: eventoSeleccionado.id, token: codigo })
+  })
+    .then(function (r) { return r.json(); })
+    .then(function (r) {
+      document.getElementById('resultado').innerHTML = '<span class="' + (r.ok ? 'ok' : 'error') + '">' + r.mensaje + '</span>';
+    })
+    .catch(function (err) {
+      document.getElementById('resultado').innerHTML = '<span class="error">Error de conexión: ' + err + '</span>';
+    });
+}
 </script>
 <footer style="max-width:480px; margin:16px auto 0; text-align:center; font-size:11px; color:#777; line-height:1.4;">
   Desarrollado por M.C. Adriana Alicia Barrios Rodríguez | Facultad de Ciencias Naturales y Exactas | Universidad Autónoma de Sinaloa | 2026
